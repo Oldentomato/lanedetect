@@ -1,0 +1,5 @@
+tqdm
+transformers
+datasets
+openai
+opencv-python
