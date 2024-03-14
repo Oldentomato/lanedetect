@@ -7,19 +7,38 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pickle
+from peft import LoraConfig, get_peft_model
+import gc
+
+# 캐싱 메모리 할당자를 활성화하여 이전에 할당된 메모리 블록을 재사용하여 메모리 관리 효율성을 향상시킵니다.
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "caching_allocator" 
+
+gc.collect()
+torch.cuda.empty_cache()
+
 
 ## references
 ## https://www.kaggle.com/code/basu369victor/blip-medical-visual-question-answering#About-the-Dataset
 ## https://github.com/dino-chiio/blip-vqa-finetune/blob/main/finetuning.py
 
 
-model = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base")
+model = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base", load_in_8bit=True)
 processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
-torch.cuda.empty_cache()
+config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    bias="none",
+    target_modules=["q_proj","k_proj"]
+)
+
+model = get_peft_model(model, config)
+model.print_trainable_parameters()
+
 torch.manual_seed(42)
 
 class VQADataset(torch.utils.data.Dataset):
@@ -58,7 +77,7 @@ train_dataset = VQADataset(dataset=training_dataset,
 valid_dataset = VQADataset(dataset=valid_dataset,
                             processor=processor)
 
-batch_size = 6 # 12
+batch_size = 4 # 12
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
 valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
 
@@ -97,7 +116,10 @@ for epoch in range(num_epochs):
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-    
+
+    #PYTORCH_CUDA_ALLOC_CONF를 빈 문자열로 재설정하면 
+    # PyTorch의 기본 메모리 할당자 동작이 복원됩니다. 
+    os.environ[ "PYTORCH_CUDA_ALLOC_CONF" ] = "" 
     model.eval()
     eval_loss = 0
     for idx, batch in zip(tqdm(range(len(valid_dataloader)), desc='Validating batch: ...'), valid_dataloader):
